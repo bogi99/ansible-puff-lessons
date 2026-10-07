@@ -45,7 +45,7 @@
          **********
          {{ ansible_facts['hostname'] }} is managed by ansible-pull
          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
-         Last applied: {{ ansible_date_time.iso8601 }}
+         Last applied: {{ ansible_facts['date_time']['iso8601'] }}
          **********
        dest: /etc/motd
        owner: root

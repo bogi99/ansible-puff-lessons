@@ -1,7 +1,7 @@
 ---
 
 - name: Basic system setup
-  hosts: localhost
+  hosts: lubuntu264testing
   connection: local
   become: true
 

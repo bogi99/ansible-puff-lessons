@@ -1,7 +1,7 @@
 ---
 
 - name: Basic system setup
-  hosts: ubuntu264testing
+  hosts: localhost, ubuntu264testing
   connection: local
   become: true
 

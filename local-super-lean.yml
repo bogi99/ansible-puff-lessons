@@ -1,1 +1,121 @@
+---
+- name: Optimize Ubuntu 26.04 Server VM for Proxmox
+  hosts: localhost
+  connection: local
+  become: true
 
+  tasks:
+    - name: 1. PURGE UNWANTED HARDWARE PACKAGES & OLD SERVICES
+      ansible.builtin.apt:
+        name:
+          - multipath-tools
+          - open-iscsi
+          - cryptsetup
+          - mdadm
+          - open-vm-tools
+          - zram-config  # Remove legacy configuration if present
+        state: absent
+        purge: true
+
+    - name: 2. INSTALL STREAMLINED VIRTUAL KERNEL & GUEST AGENTS
+      ansible.builtin.apt:
+        name:
+          - linux-image-virtual
+          - linux-headers-virtual
+          - qemu-guest-agent
+          - systemd-zram-generator
+        state: present
+        update_cache: true
+
+    - name: Ensure QEMU Guest Agent is enabled and running
+      ansible.builtin.systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: true
+
+    - name: 3. DISABLE CLOUD-INIT TO SPEED UP BOOT TIMES
+      ansible.builtin.file:
+        path: /etc/cloud/cloud-init.disabled
+        state: touch
+        modification_time: preserve
+        access_time: preserve
+
+    - name: 4. CONFIGURE SYSTEMD-ZRAM-GENERATOR
+      ansible.builtin.copy:
+        dest: /etc/systemd/zram-generator.conf
+        content: |
+          [zram0]
+          zram-size = ram * 0.5
+          compression-algorithm = lz4
+        mode: '0644'
+      notify: Reload systemd and restart ZRAM
+
+    - name: 5. ADJUST KERNEL SWAPPINESS AND PAGE CLUSTERING FOR ZRAM
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-zram-swappiness.conf
+        content: |
+          vm.swappiness=100
+          vm.page-cluster=0
+        mode: '0644'
+      notify: Apply sysctl settings
+
+    - name: 6. REMOVE TRADITIONAL DISK SWAP FILE (/swap.img)
+      block:
+        - name: Check if /swap.img is active in swapon
+          ansible.builtin.command: swapon --show=NAME --noheadings
+          register: running_swaps
+          changed_when: false
+
+        - name: Turn off /swap.img if active
+          ansible.builtin.command: swapoff /swap.img
+          when: "'/swap.img' in running_swaps.stdout"
+          changed_when: true
+
+        - name: Delete the physical /swap.img file
+          ansible.builtin.file:
+            path: /swap.img
+            state: absent
+
+        - name: Remove /swap.img entry from /etc/fstab
+          ansible.builtin.replace:
+            path: /etc/fstab
+            regexp: '^.*/swap\.img\s+.*$'
+            replace: '# /swap.img removed by ansible optimization'
+
+    - name: 7. CAP SYSTEMD JOURNAL LOG SIZES TO 100MB
+      block:
+        - name: Create journald configuration drop-in directory
+          ansible.builtin.file:
+            path: /etc/systemd/journald.conf.d
+            state: directory
+            mode: '0755'
+
+        - name: Write max-size configuration for logs
+          ansible.builtin.copy:
+            dest: /etc/systemd/journald.conf.d/max-size.conf
+            content: |
+              [Journal]
+              SystemMaxUse=100M
+            mode: '0644'
+          notify: Restart journald
+
+    - name: 8. HOUSEKEEPING (CLEAN ORPHANED PACKAGES)
+      ansible.builtin.apt:
+        autoremove: true
+        purge: true
+
+  handlers:
+    - name: Reload systemd and restart ZRAM
+      ansible.builtin.systemd:
+        daemon_reload: true
+        name: systemd-zram-setup@zram0.service
+        state: restarted
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      changed_when: true
+
+    - name: Restart journald
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted
